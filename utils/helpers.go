@@ -1,0 +1,117 @@
+// utils/helpers.go
+package utils
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"syscall"
+)
+
+const (
+	alpineURL = "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-minirootfs-3.19.1-x86_64.tar.gz"
+)
+
+// CheckAndSetupRootFS চেক করবে rootfs আছে কিনা, না থাকলে ডাউনলোড করবে
+func CheckAndSetupRootFS(lowerDir string) {
+	if _, err := os.Stat(lowerDir); os.IsNotExist(err) {
+		fmt.Println("Base rootfs not found. Triggering automated setup...")
+		if err := setupRootFS(lowerDir); err != nil {
+			fmt.Printf("Failed to setup rootfs: %v\n", err)
+			os.Exit(1)
+		}
+	}
+}
+
+// setupRootFS 내부 লজিক (ছোট হাতের অক্ষরে, কারণ এটি শুধু এই প্যাকেজেই লাগবে)
+func setupRootFS(targetDir string) error {
+	os.MkdirAll(targetDir, 0755)
+
+	fmt.Println("Downloading Alpine Linux minirootfs...")
+	resp, err := http.Get(alpineURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	gzipReader, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return err
+	}
+	defer gzipReader.Close()
+
+	tarReader := tar.NewReader(gzipReader)
+
+	fmt.Println("Extracting rootfs layers...")
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break 
+		}
+		if err != nil {
+			return err
+		}
+
+		target := filepath.Join(targetDir, header.Name)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, header.FileInfo().Mode())
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				outFile.Close()
+				return err
+			}
+			outFile.Close()
+		case tar.TypeSymlink:
+			os.Symlink(header.Linkname, target)
+		}
+	}
+
+	fmt.Println("RootFS successfully automated and configured!")
+	return nil
+}
+
+// MountOverlayFS কন্টেইনারের জন্য OverlayFS লেয়ার মাউন্ট করবে
+func MountOverlayFS(lowerDir, upperDir, workDir, mergedDir string) {
+	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+	err := syscall.Mount("overlay", mergedDir, "overlay", 0, opts)
+	if err != nil {
+		fmt.Printf("Overlay Mount Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// IsolateAndPivotRoot কন্টেইনারের ফাইলসিস্টেম এবং প্রসেস আইসোলেট করবে
+func IsolateAndPivotRoot(mergedDir string) {
+	err := syscall.Chroot(mergedDir)
+	if err != nil {
+		fmt.Printf("Chroot Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	os.Chdir("/")
+	syscall.Mount("proc", "proc", "proc", 0, "")
+	syscall.Sethostname([]byte("my-isolated-container"))
+}
+
+// CreateContainerDirs কন্টেইনারের জন্য প্রয়োজনীয় ডিরেক্টরি তৈরি করে
+func CreateContainerDirs(upper, work, merged string) {
+	os.MkdirAll(upper, 0755)
+	os.MkdirAll(work, 0755)
+	os.MkdirAll(merged, 0755)
+}
