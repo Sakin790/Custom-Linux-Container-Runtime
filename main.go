@@ -38,13 +38,11 @@ func run() {
 
 	
 	containerID := fmt.Sprintf("container-%d", time.Now().UnixNano())
-
-
 	defer utils.CleanupContainer(containerID)
 
-	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
 
-	
+
+	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("CONTAINER_ID=%s", containerID))
 
 	cmd.Stdin = os.Stdin
