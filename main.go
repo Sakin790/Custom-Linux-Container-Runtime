@@ -1,4 +1,4 @@
-// main.go
+
 package main
 
 import (
@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
-
-	// ফিক্স: তোমার নিজস্ব utils প্যাকেজটি এখানে ইমপোর্ট করো
 	"docker/utils"
 )
 
@@ -35,10 +33,20 @@ func run() {
 	basePath, _ := os.Getwd()
 	lowerDir := filepath.Join(basePath, "alpine-rootfs")
 
-	// utils প্যাকেজের ফাংশন কল
+
 	utils.CheckAndSetupRootFS(lowerDir)
 
+	
+	containerID := fmt.Sprintf("container-%d", time.Now().UnixNano())
+
+
+	defer utils.CleanupContainer(containerID)
+
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
+
+	
+	cmd.Env = append(os.Environ(), fmt.Sprintf("CONTAINER_ID=%s", containerID))
+
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -59,7 +67,12 @@ func run() {
 func child() {
 	fmt.Printf("Running [Child] - PID: %d\n", os.Getpid())
 
-	containerID := fmt.Sprintf("container-%d", time.Now().UnixNano())
+
+	containerID := os.Getenv("CONTAINER_ID")
+	if containerID == "" {
+		fmt.Println("Container ID not found in environment")
+		os.Exit(1)
+	}
 
 	basePath, _ := os.Getwd()
 	lowerDir := filepath.Join(basePath, "alpine-rootfs")
@@ -67,7 +80,6 @@ func child() {
 	workDir := filepath.Join(basePath, "containers", containerID, "work")
 	mergedDir := filepath.Join(basePath, "containers", containerID, "merged")
 
-	// utils প্যাকেজের ফাংশনগুলো ব্যবহার করা হচ্ছে
 	utils.CreateContainerDirs(upperDir, workDir, mergedDir)
 	utils.MountOverlayFS(lowerDir, upperDir, workDir, mergedDir)
 	utils.IsolateAndPivotRoot(mergedDir)
@@ -79,8 +91,21 @@ func child() {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
+	
+
+	cmd.Env = []string{
+		"PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+		"TERM=xterm-256color", 
+		
+	}
+
+	
 	if err := cmd.Run(); err != nil {
-		fmt.Printf("Error executing command inside container: %v\n", err)
-		os.Exit(1)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			fmt.Printf("\n👋 Container shell exited with status: %d\n", exitErr.ExitCode())
+		} else {
+			fmt.Printf("Error executing command inside container: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }

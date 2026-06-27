@@ -54,7 +54,7 @@ func setupRootFS(targetDir string) error {
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
-			break 
+			break
 		}
 		if err != nil {
 			return err
@@ -114,4 +114,34 @@ func CreateContainerDirs(upper, work, merged string) {
 	os.MkdirAll(upper, 0755)
 	os.MkdirAll(work, 0755)
 	os.MkdirAll(merged, 0755)
+}
+
+func CleanupContainer(containerID string) {
+	basePath, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("⚠️ Error getting current working directory: %v\n", err)
+		return
+	}
+
+	// filepath.Clean ব্যবহার করে পাথের বাড়তি / বা ডট ডিলিট করা
+	mergedDir := filepath.Clean(filepath.Join(basePath, "containers", containerID, "merged"))
+	containerDir := filepath.Clean(filepath.Join(basePath, "containers", containerID))
+
+	fmt.Printf("\n🧹 Starting cleanup for container: %s\n", containerID)
+
+	// ১. কার্নেল থেকে সঠিক পাথে আনমাউন্ট করা
+	err = syscall.Unmount(mergedDir, syscall.MNT_DETACH)
+	if err != nil {
+		fmt.Printf("⚠️ Warning: Failed to unmount %s: %v\n", mergedDir, err)
+	} else {
+		fmt.Println("✅ Successfully unmounted container filesystem.")
+	}
+
+	// ২. ডিলিট করা
+	err = os.RemoveAll(containerDir)
+	if err != nil {
+		fmt.Printf("⚠️ Warning: Failed to delete container directory: %v\n", err)
+	} else {
+		fmt.Println("✅ Successfully deleted temporary container files.")
+	}
 }
